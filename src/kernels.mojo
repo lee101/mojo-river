@@ -12,7 +12,7 @@ def p(addr: Int) -> Ptr:
 
 
 def dot(x: Ptr, w: Ptr, d: Int) -> Float64:
-    comptime W = 4
+    comptime W = simdwidthof[DType.float64]()
     var acc = SIMD[DType.float64, W](0.0)
     var i = 0
     while i + W <= d:
@@ -23,6 +23,57 @@ def dot(x: Ptr, w: Ptr, d: Int) -> Float64:
         total += x[i] * w[i]
         i += 1
     return total
+
+
+def predict_rows(
+    x: Ptr,
+    weights: Ptr,
+    destination: Ptr,
+    d: Int,
+    intercept: Float64,
+    logistic: Bool,
+    start: Int,
+    end: Int,
+):
+    comptime W = simdwidthof[DType.float64]()
+    var i = start
+    while i + 4 <= end:
+        var acc0 = SIMD[DType.float64, W](0.0)
+        var acc1 = SIMD[DType.float64, W](0.0)
+        var acc2 = SIMD[DType.float64, W](0.0)
+        var acc3 = SIMD[DType.float64, W](0.0)
+        var j = 0
+        while j + W <= d:
+            var weight = weights.load[width=W](j)
+            acc0 += x.load[width=W](i * d + j) * weight
+            acc1 += x.load[width=W]((i + 1) * d + j) * weight
+            acc2 += x.load[width=W]((i + 2) * d + j) * weight
+            acc3 += x.load[width=W]((i + 3) * d + j) * weight
+            j += W
+        var raw0 = acc0.reduce_add()
+        var raw1 = acc1.reduce_add()
+        var raw2 = acc2.reduce_add()
+        var raw3 = acc3.reduce_add()
+        while j < d:
+            var weight = weights[j]
+            raw0 += x[i * d + j] * weight
+            raw1 += x[(i + 1) * d + j] * weight
+            raw2 += x[(i + 2) * d + j] * weight
+            raw3 += x[(i + 3) * d + j] * weight
+            j += 1
+        raw0 += intercept
+        raw1 += intercept
+        raw2 += intercept
+        raw3 += intercept
+        destination[i] = sigmoid(raw0) if logistic else raw0
+        destination[i + 1] = sigmoid(raw1) if logistic else raw1
+        destination[i + 2] = sigmoid(raw2) if logistic else raw2
+        destination[i + 3] = sigmoid(raw3) if logistic else raw3
+        i += 4
+    while i < end:
+        var raw = dot(x + i * d, weights, d) + intercept
+        destination[i] = sigmoid(raw) if logistic else raw
+        i += 1
 
 
 def standard_update_vector(
@@ -324,9 +375,8 @@ def mr_predict(
     var xp = p(x)
     var wp = p(weights)
     var dp = p(dst)
-    for i in range(n):
-        var raw = dot(xp + i * d, wp, d) + intercept
-        dp[i] = sigmoid(raw) if logistic != 0 else raw
+    var use_logistic = logistic != 0
+    predict_rows(xp, wp, dp, d, intercept, use_logistic, 0, n)
 
 
 @export("mr_optimizer_step")

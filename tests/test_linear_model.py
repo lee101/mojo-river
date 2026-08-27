@@ -179,3 +179,18 @@ def test_duplicate_batch_columns_are_rejected():
     X = pd.DataFrame([[1.0, 2.0]], columns=["x", "x"])
     with pytest.raises(ValueError, match="unique"):
         linear_model.LinearRegression().predict_many(X)
+
+
+@pytest.mark.parametrize(("rows", "columns"), [(31, 31), (33_000, 31)])
+def test_predict_many_simd_tail_and_large_batch_threshold(rows, columns):
+    rng = np.random.default_rng(123)
+    train = pd.DataFrame(rng.normal(size=(40, columns)))
+    target = pd.Series(rng.normal(size=len(train)))
+    query = pd.DataFrame(rng.normal(size=(rows, columns)))
+    model = linear_model.LinearRegression()
+    model.learn_many(train, target)
+
+    expected = query.to_numpy() @ np.fromiter(
+        model.weights.values(), dtype=np.float64
+    ) + model.intercept
+    assert np.allclose(model.predict_many(query), expected)

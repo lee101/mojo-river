@@ -78,22 +78,23 @@ run.
 
 | case | mojo-river | river | result |
 | --- | ---: | ---: | ---: |
-| LinearRegression.learn_many (200k x 32) | 17.58 ms | 114.12 ms | 6.49x faster |
-| LogisticRegression.learn_many (200k x 32) | 23.76 ms | 166.82 ms | 7.02x faster |
-| LinearRegression.predict_many (500k x 32) | 30.14 ms | 25.84 ms | 1.17x slower |
-| StandardScaler.learn_many (500k x 24) | 31.53 ms | 283.23 ms | 8.98x faster |
-| StandardScaler.transform_many (500k x 24) | 30.50 ms | 168.59 ms | 5.53x faster |
-| PAClassifier.learn_one stream (25k x 64) | 972.38 ms | 1998.01 ms | 2.05x faster |
-| MSE progressive update (2 million) | 7.59 ms | 2798.89 ms | 369.00x faster |
-| Normalizer L2 (100k x 64) | 59.34 ms | 2340.10 ms | 39.43x faster |
+| LinearRegression.learn_many (200k x 32) | 12.05 ms | 93.31 ms | 7.74x faster |
+| LogisticRegression.learn_many (200k x 32) | 18.34 ms | 59.56 ms | 3.25x faster |
+| LinearRegression.predict_many (500k x 32) | 11.68 ms | 11.99 ms | 1.03x faster |
+| StandardScaler.learn_many (500k x 24) | 51.70 ms | 192.67 ms | 3.73x faster |
+| StandardScaler.transform_many (500k x 24) | 48.63 ms | 104.79 ms | 2.15x faster |
+| PAClassifier.learn_one stream (25k x 64) | 587.12 ms | 1085.14 ms | 1.85x faster |
+| MSE progressive update (2 million) | 6.83 ms | 1507.66 ms | 220.70x faster |
+| Normalizer L2 (100k x 64) | 62.15 ms | 2032.96 ms | 32.71x faster |
 
 The metric and normalizer comparisons use `update_many` and `transform_many`
 to move a complete dense buffer in one call; upstream River exposes only
-per-item methods for those classes. The prediction regression and all other
+per-item methods for those classes. The prediction result and all other
 changes in the table are reported as measured.
 
-No GPU path is included. These kernels have low arithmetic intensity, so this
-port keeps computation on the CPU and parallelizes only large independent
+No GPU path is included. Dense prediction performs roughly 0.25 floating-point
+operations per byte read, and the other kernels are similarly memory-bound, so
+this port keeps computation on the CPU and parallelizes only large independent
 batch workloads.
 
 Run the benchmark only through Pixi so the machine-wide benchmark lock is
@@ -115,11 +116,13 @@ The FFI performs no allocation and retains no pointers. Weight, gradient,
 optimizer-moment, scaler-statistic, input, and result buffers all remain owned
 by Python. Stable DataFrame column order takes the zero-copy fast path;
 changing schemas are remapped once into the model's persistent feature order.
-Dot products and scaler kernels use SIMD with explicit scalar remainder loops,
-and batch operations cross the FFI once per operation. Large independent
-column groups or row ranges run in parallel. When a DataFrame already matches
-the scaler's persistent schema, statistic buffers also cross the FFI directly
-without temporary copies.
+Dot products and scaler kernels use SIMD with explicit scalar remainder loops.
+Prediction evaluates four rows per SIMD loop so weight vectors are reused and
+independent accumulators can overlap. Batches with at least one million numeric
+values split contiguous row ranges across at most eight persistent host workers;
+smaller batches stay serial. Each worker passes a zero-copy NumPy slice through
+the FFI. When a DataFrame already matches the scaler's persistent schema,
+statistic buffers also cross the FFI directly without temporary copies.
 
 ## License
 

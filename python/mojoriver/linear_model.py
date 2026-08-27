@@ -1,11 +1,27 @@
 from __future__ import annotations
 
 import numbers
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
 from . import optim
 from ._lib import addr, f64, lib, storage, vector
+
+
+_PREDICT_PARALLEL_WORK = 1_000_000
+_PREDICT_MAX_WORKERS = 8
+_executor = None
+
+
+def _prediction_executor():
+    global _executor
+    if _executor is None:
+        _executor = ThreadPoolExecutor(
+            max_workers=min(_PREDICT_MAX_WORKERS, os.cpu_count() or 1)
+        )
+    return _executor
 
 
 class _DenseFeatures:
@@ -180,15 +196,44 @@ class _GLM(_DenseFeatures):
 
     def _predict_array(self, matrix):
         result = np.empty(len(matrix), dtype=np.float64)
-        lib().mr_predict(
-            addr(matrix),
-            addr(self._weights_array),
-            addr(result),
-            len(matrix),
-            len(self._features),
-            self.intercept,
-            int(self._logistic),
-        )
+        library = lib()
+        if matrix.size >= _PREDICT_PARALLEL_WORK and len(matrix) > 1:
+            workers = min(
+                _PREDICT_MAX_WORKERS,
+                os.cpu_count() or 1,
+                (matrix.size + _PREDICT_PARALLEL_WORK - 1)
+                // _PREDICT_PARALLEL_WORK,
+            )
+            chunk = (len(matrix) + workers - 1) // workers
+            futures = []
+            for start in range(0, len(matrix), chunk):
+                stop = min(start + chunk, len(matrix))
+                matrix_chunk = matrix[start:stop]
+                result_chunk = result[start:stop]
+                futures.append(
+                    _prediction_executor().submit(
+                        library.mr_predict,
+                        addr(matrix_chunk),
+                        addr(self._weights_array),
+                        addr(result_chunk),
+                        len(matrix_chunk),
+                        len(self._features),
+                        self.intercept,
+                        int(self._logistic),
+                    )
+                )
+            for future in futures:
+                future.result()
+        else:
+            library.mr_predict(
+                addr(matrix),
+                addr(self._weights_array),
+                addr(result),
+                len(matrix),
+                len(self._features),
+                self.intercept,
+                int(self._logistic),
+            )
         return result
 
     def _raw_or_probability_one(self, x):
