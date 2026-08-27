@@ -1,12 +1,10 @@
 """Dense online-learning kernels exposed through a small C ABI."""
 
-from std.algorithm.functional import parallelize
 from std.math import exp, log, sqrt
-from std.runtime import initialize_runtime
 from std.sys.info import simd_width_of as simdwidthof
 
 
-comptime Ptr = UnsafePointer[Float64, AnyOrigin[mut=True]]
+comptime Ptr = Pointer[Float64, AnyOrigin[mut=True]]
 
 
 def p(addr: Int) -> Ptr:
@@ -406,29 +404,16 @@ def mr_standard_update_many(
     with_std: Int,
 ) abi("C"):
     comptime W = simdwidthof[DType.float64]()
-    comptime PARALLEL_THRESHOLD = 262144
     var xp = p(x)
     var cp = p(counts)
     var mp = p(means)
     var vp = p(variances)
     var vector_groups = d // W
     var use_std = with_std != 0
-    if n * d >= PARALLEL_THRESHOLD and vector_groups > 1:
-        initialize_runtime()
-
-        @parameter
-        def update_group(group: Int):
-            standard_update_vector(
-                p(x), p(counts), p(means), p(variances),
-                n, d, group * W, use_std,
-            )
-
-        parallelize[update_group](vector_groups)
-    else:
-        for group in range(vector_groups):
-            standard_update_vector(
-                xp, cp, mp, vp, n, d, group * W, use_std
-            )
+    for group in range(vector_groups):
+        standard_update_vector(
+            xp, cp, mp, vp, n, d, group * W, use_std
+        )
     for j in range(vector_groups * W, d):
         standard_update_scalar(xp, cp, mp, vp, n, d, j, use_std)
 
@@ -438,30 +423,13 @@ def mr_standard_transform(
     x: Int, means: Int, variances: Int, dst: Int, n: Int, d: Int,
     with_std: Int,
 ) abi("C"):
-    comptime PARALLEL_THRESHOLD = 262144
-    comptime TASKS = 32
     var xp = p(x)
     var mp = p(means)
     var vp = p(variances)
     var dp = p(dst)
     for j in range(d):
         vp[j] = 1.0 / sqrt(vp[j]) if with_std != 0 and vp[j] > 0.0 else 1.0
-    if n * d >= PARALLEL_THRESHOLD and n > 1:
-        initialize_runtime()
-        var task_count = min(TASKS, n)
-        var rows_per_task = (n + task_count - 1) // task_count
-
-        @parameter
-        def transform_task(task: Int):
-            var start = task * rows_per_task
-            var end = min(n, start + rows_per_task)
-            standard_transform_rows(
-                p(x), p(means), p(variances), p(dst), d, start, end
-            )
-
-        parallelize[transform_task](task_count)
-    else:
-        standard_transform_rows(xp, mp, vp, dp, d, 0, n)
+    standard_transform_rows(xp, mp, vp, dp, d, 0, n)
 
 
 @export("mr_normalize")
