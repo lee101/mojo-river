@@ -16,7 +16,7 @@ def dot(x: Ptr, w: Ptr, d: Int) -> Float64:
     var acc = SIMD[DType.float64, W](0.0)
     var i = 0
     while i + W <= d:
-        acc += x.load[width=W](i) * w.load[width=W](i)
+        acc += x.unsafe_load[width=W](i) * w.unsafe_load[width=W](i)
         i += W
     var total = acc.reduce_add()
     while i < d:
@@ -44,11 +44,11 @@ def predict_rows(
         var acc3 = SIMD[DType.float64, W](0.0)
         var j = 0
         while j + W <= d:
-            var weight = weights.load[width=W](j)
-            acc0 += x.load[width=W](i * d + j) * weight
-            acc1 += x.load[width=W]((i + 1) * d + j) * weight
-            acc2 += x.load[width=W]((i + 2) * d + j) * weight
-            acc3 += x.load[width=W]((i + 3) * d + j) * weight
+            var weight = weights.unsafe_load[width=W](j)
+            acc0 += x.unsafe_load[width=W](i * d + j) * weight
+            acc1 += x.unsafe_load[width=W]((i + 1) * d + j) * weight
+            acc2 += x.unsafe_load[width=W]((i + 2) * d + j) * weight
+            acc3 += x.unsafe_load[width=W]((i + 3) * d + j) * weight
             j += W
         var raw0 = acc0.reduce_add()
         var raw1 = acc1.reduce_add()
@@ -92,7 +92,7 @@ def standard_update_vector(
     var square_sum = SIMD[DType.float64, W](0.0)
     var i = 0
     while i < n:
-        var values = x.load[width=W](i * d + j)
+        var values = x.unsafe_load[width=W](i * d + j)
         square_sum += values * values
         var valid = values.eq(values)
         new_sum += valid.select(values, SIMD[DType.float64, W](0.0))
@@ -101,7 +101,7 @@ def standard_update_vector(
         )
         i += 1
 
-    var old_count = counts.load[width=W](j)
+    var old_count = counts.unsafe_load[width=W](j)
     var combined = old_count + new_count
     var valid_count = new_count.gt(0.0)
     var safe_count = valid_count.select(new_count, SIMD[DType.float64, W](1.0))
@@ -109,10 +109,10 @@ def standard_update_vector(
     var new_mean = new_sum / safe_count
     var a = old_count / safe_combined
     var b = new_count / safe_combined
-    var old_mean = means.load[width=W](j)
+    var old_mean = means.unsafe_load[width=W](j)
     means.store(j, valid_count.select(a * old_mean + b * new_mean, old_mean))
     if with_std:
-        var old_variance = variances.load[width=W](j)
+        var old_variance = variances.unsafe_load[width=W](j)
         var new_variance = square_sum / Float64(n) - new_mean * new_mean
         var difference = old_mean - new_mean
         variances.store(
@@ -182,8 +182,8 @@ def standard_transform_rows(
         var j = 0
         while j < full:
             var values = (
-                x.load[width=W](offset + j) - means.load[width=W](j)
-            ) * scales.load[width=W](j)
+                x.unsafe_load[width=W](offset + j) - means.unsafe_load[width=W](j)
+            ) * scales.unsafe_load[width=W](j)
             destination.store(offset + j, values)
             j += W
         while j < d:
